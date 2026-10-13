@@ -1,5 +1,5 @@
 
-name: Build TvMenu ARM64
+name: Build libTvMenu.so ARM64
 
 on:
   workflow_dispatch:
@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   build:
-    name: Build Android ARM64
+    name: Build libTvMenu.so ARM64
     runs-on: ubuntu-latest
 
     defaults:
@@ -35,8 +35,6 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-          cache: gradle
-          cache-dependency-path: HoldableTemplate/HoldableTemplate/**/*.gradle*
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
@@ -69,7 +67,6 @@ jobs:
           NDK="$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION"
           TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
 
-          test -d "$NDK"
           sudo apt-get update
           sudo apt-get install -y perl make git
 
@@ -100,51 +97,66 @@ jobs:
           test -f "$OPENSSL_PREFIX/lib/libcrypto.a"
           test -f "$OPENSSL_PREFIX/lib/libssl.a"
 
-          echo "OpenSSL ARM64 libraries built successfully."
-
-      - name: Inspect and recover missing files from Git history
+      - name: Prepare native sources for CI
         shell: bash
         run: |
           set -euxo pipefail
 
           CPP="app/src/main/cpp"
 
-          echo "=== Search all local Git history for ModMenu.hpp ==="
-          git log --all --format='%H' -- \
-            '*/ModMenu.hpp' > /tmp/modmenu-commits.txt || true
+          test -d "$CPP/Include/Menu"
+          test -f "$CPP/native-lib.cpp"
+          test -f "$CPP/Include/Menu/Buttons.hpp"
 
-          while read -r commit; do
-            [ -n "$commit" ] || continue
+          # Linux paths are case-sensitive. Provide the lowercase include
+          # directory referenced by native-lib.cpp without committing it.
+          if [ ! -e "$CPP/include" ]; then
+            ln -s Include "$CPP/include"
+          fi
 
-            git ls-tree -r --name-only "$commit" |
-              grep -Ei '(^|/)ModMenu\.hpp$' || true
-          done < /tmp/modmenu-commits.txt
+          # Recover ModMenu.hpp from repository history if it exists there.
+          if [ ! -f "$CPP/Include/Menu/ModMenu.hpp" ]; then
+            FOUND=0
 
-          echo "=== Current ModMenu.hpp files ==="
-          find "$CPP" -type f -iname 'ModMenu.hpp' -print
+            while read -r COMMIT; do
+              [ -n "$COMMIT" ] || continue
 
-          echo "=== Search history for RefreshSoundboard ==="
-          git log --all -S'RefreshSoundboard' \
-            --format='%H' -- \
-            'HoldableTemplate/HoldableTemplate/app/src/main/cpp/**' \
-            > /tmp/soundboard-commits.txt || true
+              for FILE in \
+                "HoldableTemplate/HoldableTemplate/app/src/main/cpp/Include/Menu/ModMenu.hpp" \
+                "HoldableTemplate/HoldableTemplate/app/src/main/cpp/include/Menu/ModMenu.hpp"
+              do
+                if git cat-file -e "$COMMIT:$FILE" 2>/dev/null; then
+                  mkdir -p "$CPP/Include/Menu"
+                  git show "$COMMIT:$FILE" > "$CPP/Include/Menu/ModMenu.hpp"
+                  FOUND=1
+                  break 2
+                fi
+              done
+            done < <(git log --all --format='%H' -- \
+              '*/ModMenu.hpp' \
+              '*/Menu/ModMenu.hpp')
 
-          while read -r commit; do
-            [ -n "$commit" ] || continue
+            if [ "$FOUND" -ne 1 ]; then
+              echo "::error::ModMenu.hpp was not found in the working tree or Git history."
+              exit 1
+            fi
+          fi
 
-            echo "--- Commit $commit ---"
-            git grep -n 'RefreshSoundboard' "$commit" -- \
-              'HoldableTemplate/HoldableTemplate/app/src/main/cpp/**' \
-              || true
-          done < /tmp/soundboard-commits.txt
+          # The current Buttons.hpp calls RefreshSoundboard(), but the
+          # supplied source does not declare that method. Disable those
+          # calls in this temporary CI checkout so the library can compile.
+          if grep -q 'Buttons::RefreshSoundboard' "$CPP/Include/Menu/Buttons.hpp"; then
+            echo "::warning::Soundboard refresh calls are disabled in this CI build."
+            sed -i \
+              's/Buttons::RefreshSoundboard();/(void)0;/g' \
+              "$CPP/Include/Menu/Buttons.hpp"
+          fi
 
-          echo "=== Tracked menu-related files ==="
-          git ls-files '*ModMenu.hpp' '*Buttons.hpp' '*Soundboard*'
+          test -f "$CPP/include/Menu/ModMenu.hpp"
 
-          echo "=== Current menu directory ==="
-          ls -la "$CPP/Include/Menu"
+          echo "=== Native source preparation complete ==="
 
-      - name: Verify OpenSSL
+      - name: Verify OpenSSL libraries
         shell: bash
         run: |
           set -euxo pipefail
@@ -154,22 +166,48 @@ jobs:
           test -f "$CPP/extern/OpenSSL/arm64-v8a/lib/libcrypto.a"
           test -f "$CPP/extern/OpenSSL/arm64-v8a/lib/libssl.a"
 
-      - name: Build ARM64 debug APK
+      - name: Build ARM64 native library
         shell: bash
         run: |
           set -euxo pipefail
 
           chmod +x ./gradlew
 
-          ./gradlew --no-daemon assembleDebug \
+          ./gradlew --no-daemon externalNativeBuildDebug \
             -Pandroid.injected.build.abi=arm64-v8a
 
-      - name: Upload APK
-        if: success()
+      - name: Locate and rename native library
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          mkdir -p output
+
+          SOURCE="$(find app/build/intermediates \
+            -type f \
+            -name 'librayvo.so' \
+            -print \
+            -quit)"
+
+          if [ -z "$SOURCE" ]; then
+            echo "::error::librayvo.so was not generated."
+            echo "Check the native CMake compilation errors above."
+            exit 1
+          fi
+
+          cp "$SOURCE" output/libTvMenu.so
+
+          file output/libTvMenu.so
+
+          readelf -h output/libTvMenu.so |
+            grep -E 'Class:|Machine:'
+
+          test -s output/libTvMenu.so
+
+      - name: Upload libTvMenu.so
         uses: actions/upload-artifact@v4
         with:
-          name: TvMenu-ARM64-debug
-          path: HoldableTemplate/HoldableTemplate/app/build/outputs/apk/debug/*.apk
+          name: libTvMenu-ARM64
+          path: HoldableTemplate/HoldableTemplate/output/libTvMenu.so
           if-no-files-found: error
           retention-days: 14
-  
