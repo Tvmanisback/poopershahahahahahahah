@@ -41,7 +41,7 @@ jobs:
         with:
           packages: ''
 
-      - name: Install required SDK packages
+      - name: Install Android SDK packages
         run: |
           sdkmanager --install "platform-tools"
           sdkmanager --install "platforms;android-35"
@@ -49,14 +49,61 @@ jobs:
           sdkmanager --install "cmake;3.22.1"
           sdkmanager --install "ndk;27.2.12479018"
 
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses || true
+
+      - name: Build OpenSSL for ARM64
+        working-directory: HoldableTemplate/HoldableTemplate/app/src/main/cpp
+        env:
+          ANDROID_NDK_VERSION: "27.2.12479018"
+        run: |
+          set -eux
+
+          OPENSSL_DIR="$PWD/extern/OpenSSL"
+          OPENSSL_PREFIX="$OPENSSL_DIR/arm64-v8a"
+          NDK="$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION"
+
+          test -d "$NDK"
+
+          sudo apt-get update
+          sudo apt-get install -y perl make git
+
+          git clone \
+            --depth 1 \
+            --branch openssl-3.5.4 \
+            https://github.com/openssl/openssl.git \
+            /tmp/openssl-src
+
+          cd /tmp/openssl-src
+
+          export ANDROID_NDK_HOME="$NDK"
+          export PATH="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
+
+          ./Configure android-arm64 \
+            -D__ANDROID_API__=27 \
+            no-shared \
+            no-tests \
+            --prefix="$OPENSSL_PREFIX"
+
+          make -j2 build_libs
+          make install_sw
+
+          test -f "$OPENSSL_PREFIX/lib/libcrypto.a"
+          test -f "$OPENSSL_PREFIX/lib/libssl.a"
+
+          echo "OpenSSL ARM64 libraries built successfully."
+          ls -lh "$OPENSSL_PREFIX/lib/"
+
       - name: Verify project files
         run: |
           test -f gradlew
           test -f app/build.gradle
           test -f app/src/main/cpp/CMakeLists.txt
+          test -f app/src/main/cpp/extern/OpenSSL/arm64-v8a/lib/libcrypto.a
+          test -f app/src/main/cpp/extern/OpenSSL/arm64-v8a/lib/libssl.a
           chmod +x gradlew
 
-      - name: Build debug APK
+      - name: Build ARM64 debug APK
         run: |
           ./gradlew --no-daemon clean assembleDebug \
             -Pandroid.injected.build.abi=arm64-v8a
@@ -76,7 +123,7 @@ jobs:
             -path "*/arm64-v8a/*" \
             -exec cp {} build-output/ \;
 
-          echo "=== Build output ==="
+          echo "=== Build artifacts ==="
           ls -lh build-output
 
           test -n "$(find build-output -type f -name '*.apk' -print -quit)"
