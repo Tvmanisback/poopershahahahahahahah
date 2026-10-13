@@ -1,4 +1,3 @@
-
 name: Build TvMenu ARM64
 
 on:
@@ -44,12 +43,12 @@ jobs:
       - name: Install Android SDK packages
         shell: bash
         run: |
-          set -e
+          set -euxo pipefail
           sdkmanager --install "platform-tools"
           sdkmanager --install "platforms;android-35"
           sdkmanager --install "build-tools;35.0.0"
           sdkmanager --install "cmake;3.22.1"
-          sdkmanager --install "ndk;27.2.12479018"
+          sdkmanager --install "ndk;26.1.10909125"
 
       - name: Accept Android SDK licenses
         shell: bash
@@ -58,21 +57,16 @@ jobs:
       - name: Build OpenSSL for ARM64
         working-directory: HoldableTemplate/HoldableTemplate/app/src/main/cpp
         env:
-          ANDROID_NDK_VERSION: "27.2.12479018"
+          ANDROID_NDK_VERSION: "26.1.10909125"
         shell: bash
         run: |
           set -euxo pipefail
 
-          OPENSSL_DIR="$PWD/extern/OpenSSL"
-          OPENSSL_PREFIX="$OPENSSL_DIR/arm64-v8a"
+          OPENSSL_PREFIX="$PWD/extern/OpenSSL/arm64-v8a"
           NDK="$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION"
           TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
 
           test -d "$NDK"
-          test -x "$TOOLCHAIN/clang"
-          test -x "$TOOLCHAIN/llvm-ar"
-          test -x "$TOOLCHAIN/llvm-ranlib"
-
           sudo apt-get update
           sudo apt-get install -y perl make git
 
@@ -103,58 +97,45 @@ jobs:
           test -f "$OPENSSL_PREFIX/lib/libcrypto.a"
           test -f "$OPENSSL_PREFIX/lib/libssl.a"
 
-          echo "OpenSSL ARM64 libraries built successfully."
-          ls -lh "$OPENSSL_PREFIX/lib/"
-
-      - name: Verify project files
+      - name: Diagnose native source files
         shell: bash
         run: |
           set -euxo pipefail
 
-          test -f gradlew
-          test -f app/build.gradle
-          test -f app/src/main/cpp/CMakeLists.txt
-          test -f app/src/main/cpp/extern/OpenSSL/arm64-v8a/lib/libcrypto.a
-          test -f app/src/main/cpp/extern/OpenSSL/arm64-v8a/lib/libssl.a
+          CPP="app/src/main/cpp"
 
-          chmod +x gradlew
+          echo "=== Menu header candidates ==="
+          find "$CPP" -type f \
+            \( -iname 'ModMenu.hpp' -o -iname 'ModMenu.h' \) \
+            -print
+
+          echo "=== Soundboard implementation candidates ==="
+          grep -R -n \
+            --include='*.hpp' \
+            --include='*.h' \
+            --include='*.cpp' \
+            'RefreshSoundboard' "$CPP/Include" || true
+
+          echo "=== Relevant menu files ==="
+          find "$CPP/Include/Menu" -maxdepth 2 -type f -print
+
+          echo "=== Verify OpenSSL libraries ==="
+          test -f "$CPP/extern/OpenSSL/arm64-v8a/lib/libcrypto.a"
+          test -f "$CPP/extern/OpenSSL/arm64-v8a/lib/libssl.a"
 
       - name: Build ARM64 debug APK
         shell: bash
         run: |
           set -euxo pipefail
-
-          ./gradlew --no-daemon clean assembleDebug \
+          chmod +x ./gradlew
+          ./gradlew --no-daemon assembleDebug \
             -Pandroid.injected.build.abi=arm64-v8a
 
-      - name: Collect build artifacts
-        if: success()
-        working-directory: .
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          mkdir -p build-output
-
-          find HoldableTemplate/HoldableTemplate/app/build/outputs/apk \
-            -type f -name "*.apk" \
-            -exec cp {} build-output/ \;
-
-          find HoldableTemplate/HoldableTemplate/app/build \
-            -type f -name "*.so" \
-            -path "*/arm64-v8a/*" \
-            -exec cp {} build-output/ \;
-
-          echo "=== Build artifacts ==="
-          ls -lh build-output
-
-          test -n "$(find build-output -type f -name '*.apk' -print -quit)"
-
-      - name: Upload build artifacts
+      - name: Upload APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: TvMenu-ARM64-build
-          path: build-output/*
+          name: TvMenu-ARM64-debug
+          path: HoldableTemplate/HoldableTemplate/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14
