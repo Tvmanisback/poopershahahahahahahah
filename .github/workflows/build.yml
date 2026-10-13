@@ -1,5 +1,3 @@
-
-
 name: Build TvMenu ARM64
 
 on:
@@ -37,46 +35,32 @@ jobs:
           cache: gradle
           cache-dependency-path: HoldableTemplate/HoldableTemplate/**/*.gradle*
 
-      - name: Configure Android SDK
+      - name: Set up Android SDK
         uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK packages
-        run: |
-          sdkmanager --install \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0" \
-            "cmake;3.22.1" \
-            "ndk;27.2.12479018"
+        with:
+          packages: |
+            platform-tools
+            platforms;android-35
+            build-tools;35.0.0
+            cmake;3.22.1
+            ndk;27.2.12479018
 
       - name: Accept Android SDK licenses
         run: yes | sdkmanager --licenses || true
 
-      - name: Check project files
+      - name: Verify project files
         run: |
-          test -f ./gradlew
-          test -f ./app/build.gradle
-          test -f ./app/src/main/cpp/CMakeLists.txt
+          test -f gradlew
+          test -f app/build.gradle
+          test -f app/src/main/cpp/CMakeLists.txt
+          chmod +x gradlew
 
       - name: Build ARM64 debug APK
         run: |
-          chmod +x ./gradlew
           ./gradlew --no-daemon clean assembleDebug \
             -Pandroid.injected.build.abi=arm64-v8a
 
-      - name: Locate build outputs
-        if: success()
-        working-directory: .
-        run: |
-          echo "=== APK files ==="
-          find HoldableTemplate/HoldableTemplate/app/build/outputs/apk \
-            -type f -name "*.apk" -print
-
-          echo "=== ARM64 native libraries ==="
-          find HoldableTemplate/HoldableTemplate/app/build \
-            -type f -name "*.so" -print
-
-      - name: Collect artifacts
+      - name: Collect APK and native libraries
         if: success()
         working-directory: .
         run: |
@@ -91,16 +75,16 @@ jobs:
             -path "*/arm64-v8a/*" \
             -exec cp {} build-output/ \;
 
-          echo "=== Collected artifacts ==="
+          echo "=== Build artifacts ==="
           ls -lh build-output
 
           test -n "$(find build-output -type f -name '*.apk' -print -quit)"
 
-      - name: Upload APK and native library
-        if: always()
+      - name: Upload build artifacts
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: TvMenu-ARM64-build
           path: build-output/*
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
