@@ -1,3 +1,4 @@
+
 name: Build TvMenu ARM64
 
 on:
@@ -38,15 +39,15 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: |
-            platform-tools
-            platforms;android-35
-            build-tools;35.0.0
-            cmake;3.22.1
-            ndk;27.2.12479018
+          packages: ''
 
-      - name: Accept Android SDK licenses
-        run: yes | sdkmanager --licenses || true
+      - name: Install required SDK packages
+        run: |
+          sdkmanager --install "platform-tools"
+          sdkmanager --install "platforms;android-35"
+          sdkmanager --install "build-tools;35.0.0"
+          sdkmanager --install "cmake;3.22.1"
+          sdkmanager --install "ndk;27.2.12479018"
 
       - name: Verify project files
         run: |
@@ -55,12 +56,12 @@ jobs:
           test -f app/src/main/cpp/CMakeLists.txt
           chmod +x gradlew
 
-      - name: Build ARM64 debug APK
+      - name: Build debug APK
         run: |
           ./gradlew --no-daemon clean assembleDebug \
             -Pandroid.injected.build.abi=arm64-v8a
 
-      - name: Collect APK and native libraries
+      - name: Collect build artifacts
         if: success()
         working-directory: .
         run: |
@@ -75,7 +76,7 @@ jobs:
             -path "*/arm64-v8a/*" \
             -exec cp {} build-output/ \;
 
-          echo "=== Build artifacts ==="
+          echo "=== Build output ==="
           ls -lh build-output
 
           test -n "$(find build-output -type f -name '*.apk' -print -quit)"
